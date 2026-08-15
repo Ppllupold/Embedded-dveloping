@@ -1,0 +1,5 @@
+
+openocd -f board/st_nucleo_f4.cfg
+
+cd C:\embedded_dev
+arm-none-eabi-gdb -x debug.gdb build\blink.elf

@@ -1,0 +1,31 @@
+# Build output (CMake out-of-source build dir)
+build/
+
+# Host-compiled test binary
+test.exe
+
+# Compiled/linked artifacts, wherever they land
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+
+# CMake-generated files (in case anything ever configures in-source)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Editor/IDE
+.vscode/
+
+# OS junk
+Thumbs.db
+desktop.ini
+
+# Editor swap files
+*.swp
+*~

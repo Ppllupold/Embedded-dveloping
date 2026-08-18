@@ -194,11 +194,19 @@ void vFlameAlarmTask(void *pvParameters)
     for (;;) // tasks never return -- same rule as always
     {
         // Running -> Blocked here, zero CPU cost, until EXTI4_IRQHandler
-        // notifies this task on a rising edge from the flame sensor's DO
-        // line (idles low, drives high on detection -- confirmed by
+        // notifies this task on a falling edge from the sensor's DO
+        // line (idles high, drives low on detection -- confirmed by
         // multimeter). Same wait shape as vI2CTask's ulTaskNotifyTake --
         // the interrupt is the only thing that gets us past this line.
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // TEMPORARY -- tap module test: it's a momentary switch, not a
+        // level-persistent comparator, so the usual debounce-then-recheck
+        // (below, disabled for now) finds the pin already back at idle and
+        // swallows every real tap. Just beep straight off the notify instead.
+        GPIOA_BSRR = (1 << 4); // buzzer on -- PA4, BS[4]
+        vTaskDelay(pdMS_TO_TICKS(200));
+        GPIOA_BSRR = (1 << (16 + 4)); // buzzer off -- PA4, BR[4]
 
         // Debounce, from task context, not the ISR: a comparator sitting
         // right at its trip point can chatter for a few microseconds before
@@ -206,29 +214,26 @@ void vFlameAlarmTask(void *pvParameters)
         // real delay filters that without slowing down the interrupt path
         // itself -- deferring real work out of the ISR, same discipline
         // this project has used everywhere else.
-        vTaskDelay(pdMS_TO_TICKS(20));
-
-        if (((GPIOB_IDR >> 4) & 1) == 1) // still high -- flame condition really holds
-        {
-            GPIOA_BSRR = (1 << 4); // buzzer on -- PA4, BS[4]
-
-            usart2_write_byte('F');
-            usart2_write_byte('!');
-            usart2_write_uint16(dma_sample_buffer[0]); // crude, but enough to see if the ADC is
-            usart2_write_byte('\r');
-            usart2_write_byte('\n');
-
-            // Hold the alarm until the sensor itself reports clear. Polling
-            // here, not in the ISR, is fine -- this is a human-timescale
-            // event (hundreds of ms at worst), nothing microsecond-critical
-            // about watching it clear.
-            while (((GPIOB_IDR >> 4) & 1) == 1)
-            {
-                vTaskDelay(pdMS_TO_TICKS(200));
-            }
-
-            GPIOA_BSRR = (1 << (16 + 4)); // buzzer off -- PA4, BR[4]
-        }
+        // vTaskDelay(pdMS_TO_TICKS(20));
+        //
+        // if (((GPIOB_IDR >> 4) & 1) == 1) // still high -- detection condition really holds
+        // {
+        //     GPIOA_BSRR = (1 << 4); // buzzer on -- PA4, BS[4]
+        //
+        //     usart2_write_byte('F');
+        //     usart2_write_byte('!');
+        //     usart2_write_uint16(dma_sample_buffer[0]); // crude, but enough to see if the ADC is
+        //     usart2_write_byte('\r');
+        //     usart2_write_byte('\n');
+        //
+        //     // Hold the alarm until the sensor itself reports clear.
+        //     while (((GPIOB_IDR >> 4) & 1) == 1)
+        //     {
+        //         vTaskDelay(pdMS_TO_TICKS(200));
+        //     }
+        //
+        //     GPIOA_BSRR = (1 << (16 + 4)); // buzzer off -- PA4, BR[4]
+        // }
         // else: the debounce re-check found the line already back low --
         // treat it as chatter, not a real detection, and loop back to
         // blocking rather than falsely alarming.
@@ -237,9 +242,9 @@ void vFlameAlarmTask(void *pvParameters)
 
 void vLaserTripTask(void *pvParameters)
 {
-    (void)pvParameters; // unused -- same conclusion as every other task here
+    (void)pvParameters; 
 
-    for (;;) // tasks never return -- same rule as always
+    for (;;)
     {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -247,24 +252,89 @@ void vLaserTripTask(void *pvParameters)
         if (dma_sample_buffer[0] > 100) // still above the trip point -- beam still broken
         {
             GPIOA_BSRR = (1 << 4); // buzzer on -- PA4, BS[4]
+            xTaskNotify(xPWMTaskHandle, 1, eSetValueWithOverwrite); // Wake vPWMTimerTask for the 3-second passive-buzzer alarm tone
 
-            // Wake vPWMTimerTask for the 3-second passive-buzzer alarm tone
-            // on PB7/CH2. Plain xTaskNotify, not the FromISR variant -- this
-            // is task context, not an interrupt. eSetValueWithOverwrite
-            // matches vPWMTimerTask's xTaskNotifyWait on the receiving side;
-            // the value itself (1) isn't used for anything yet, only the
-            // fact that a notification arrived.
-            xTaskNotify(xPWMTaskHandle, 1, eSetValueWithOverwrite);
+            while (dma_sample_buffer[0] > 100) // Hold the alarm until the reading itself drops below the trip point 
 
-            // Hold the alarm until the reading itself drops back below the
-            // trip point -- same "poll from task context, not the ISR"
-            // shape as vFlameAlarmTask's hold loop.
-            while (dma_sample_buffer[0] > 100)
             {
                 vTaskDelay(pdMS_TO_TICKS(200));
             }
-
             GPIOA_BSRR = (1 << (16 + 4)); // buzzer off -- PA4, BR[4]
+        }
+    }
+}
+
+#define TV_POWER_CODE 111105792
+
+static void ir_transmit(uint32_t code)
+{
+    TIM4_CCER |= (1 << 0);
+    delay_us(9000);
+    TIM4_CCER &= ~(1 << 0);
+    delay_us(4500);
+
+    for (int i = 0; i < 32; i++)
+    {
+        TIM4_CCER |= (1 << 0);
+        delay_us(562);
+        TIM4_CCER &= ~(1 << 0);
+        delay_us(((code >> i) & 1) ? 1687 : 562);
+    }
+
+    usart2_write_byte('I');
+    TIM4_CCER |= (1 << 0);
+    delay_us(562);
+    TIM4_CCER &= ~(1 << 0);
+}
+
+void vClapTask(void *pvParameters)
+{
+    (void)pvParameters;
+
+    for (;;)
+    {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (((GPIOB_IDR >> 1) & 1) == 0) // still low -- real trigger (idles high)
+        {
+            usart2_write_byte('C');
+            usart2_write_byte('!');
+            usart2_write_byte('\r');
+            usart2_write_byte('\n');
+
+            ir_transmit(TV_POWER_CODE);
+        }
+    }
+}
+
+void vIRreceiveTask(void *pvParameters)
+{
+    (void)pvParameters;
+
+    uint32_t accumulator = 0;
+    uint8_t counter = 0;
+
+    for (;;)
+    {
+        uint32_t delta;
+        xTaskNotifyWait(0, 0, &delta, portMAX_DELAY);
+
+        if (delta > 1700) { // midpoint between a real 0-bit (~1125us) and 1-bit (~2250us)
+            if (delta > 5000) { // header -- reset for a new frame
+                accumulator = 0;
+                counter = 0;
+            } else { // data bit 1
+                accumulator |= (1UL << counter);
+                counter++;
+            }
+        } else { // data bit 0 -- accumulator already has 0 there, just advance
+            counter++;
+        }
+
+        if (counter == 32) {
+            usart2_write_uint32(accumulator);
+            usart2_write_byte('\r');
+            usart2_write_byte('\n');
+            counter = 0; 
         }
     }
 }

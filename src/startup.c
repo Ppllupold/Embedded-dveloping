@@ -24,7 +24,9 @@ extern void DMA2_Stream0_IRQHandler(void);
 extern void I2C1_EV_IRQHandler(void);
 extern void I2C1_ER_IRQHandler(void);
 extern void EXTI4_IRQHandler(void);
+extern void EXTI1_IRQHandler(void);
 extern void ADC_IRQHandler(void);
+extern void TIM3_IRQHandler(void);
 
 // FreeRTOS's own core-exception handlers, defined in
 // FreeRTOS-Kernel/portable/GCC/ARM_CM4F/port.c. These are ARM core
@@ -56,13 +58,16 @@ vector_entry vector_table[73] = {
     [12 ... 13] = Default_Handler,
     [14] = xPortPendSVHandler,  // every subsequent context switch
     [15] = xPortSysTickHandler, // RTOS tick -- drives vTaskDelay/timeouts
-    [16 ... 25] = Default_Handler,
+    [16 ... 22] = Default_Handler,
+    [23] = EXTI1_IRQHandler, // EXTI1_IRQn=7, slot 16+7=23 -- clap sensor
+    [24 ... 25] = Default_Handler,
     [26] = EXTI4_IRQHandler,
     [27 ... 33] = Default_Handler,
     [34] = ADC_IRQHandler, // ADC_IRQn=18, slot 16+18=34 -- ADC1's Analog Watchdog (laser tripwire)
     [35 ... 43] = Default_Handler,
     [44] = TIM2_IRQHandler,
-    [45 ... 46] = Default_Handler,
+    [45] = TIM3_IRQHandler, // TIM3_IRQn=29, slot 16+29=45
+    [46] = Default_Handler,
     [47] = I2C1_EV_IRQHandler,
     [48] = I2C1_ER_IRQHandler,
     [49 ... 53] = Default_Handler,
@@ -157,7 +162,8 @@ TaskHandle_t xFlameTaskHandle; // same zero-init story, target of EXTI4_IRQHandl
 TaskHandle_t xLaserTaskHandle; // same zero-init story, target of ADC_IRQHandler's notify
 TaskHandle_t xPWMTaskHandle; // same zero-init story, target of vLaserTripTask's xTaskNotify --
                               // note this one's notified from task context, not an ISR
-
+TaskHandle_t xClapTaskHandle; // same zero-init story, target of EXTI1_IRQHandler's notify
+TaskHandle_t xIRTaskHandle; // same zero-init story, target of vIRreceiveTask's notify
 // EXTI4 -- flame sensor DO, falling edge (module drives DO low once IR
 // intensity crosses the onboard comparator's trip point; idles high). ISR
 // does the minimum: clear the pending flag, then hand off to task context.
@@ -172,6 +178,38 @@ void EXTI4_IRQHandler(void)
 
         BaseType_t xHigherPriorityTaskWoken = pdFALSE;
         vTaskNotifyGiveFromISR(xFlameTaskHandle, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
+
+// EXTI1 -- clap sensor DO, same shape as EXTI4_IRQHandler.
+void EXTI1_IRQHandler(void)
+{
+    if ((EXTI_PR >> 1) & 1)
+    {
+        EXTI_PR |= (1 << 1);
+
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        vTaskNotifyGiveFromISR(xClapTaskHandle, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
+
+// TIM3 CH3 input capture -- IR receiver, PB0. Computes the delta against
+// the last capture right here and passes it as the notification value.
+void TIM3_IRQHandler(void)
+{
+    if ((TIM3_SR >> 3) & 1)
+    {
+        static uint32_t last_capture = 0;
+        uint32_t new_capture = TIM3_CCR3; // reading CCR3 clears CC3IF
+        uint32_t delta = (uint16_t)(new_capture - last_capture); // truncate to 16 bits --
+                                    // ARR is only ~65.5ms now at 1us/tick, so a single wrap
+                                    // between captures is possible; this handles it correctly
+        last_capture = new_capture;
+
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xTaskNotifyFromISR(xIRTaskHandle, delta, eSetValueWithOverwrite, &xHigherPriorityTaskWoken);
         portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
     }
 }

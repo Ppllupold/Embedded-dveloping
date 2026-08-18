@@ -37,6 +37,7 @@ add_executable(blink
     src/startup.c
     src/serial_interfaces.c
     src/gpio.c
+    src/timers.c
     src/onewire.c
     src/app_tasks.c
     FreeRTOS-Kernel/tasks.c

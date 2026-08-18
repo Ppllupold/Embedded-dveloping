@@ -4,7 +4,7 @@
 // =======================================================================
 // USART2
 // =======================================================================
-static int get_int_len(int number);
+static int get_int_len(long number, int bits_amount);
 
 void usart2_write_byte(char byte)
 {
@@ -52,8 +52,22 @@ uint16_t adc1_read(void)
 
 void usart2_write_uint16(uint16_t value) {
 
-    int digit_length = get_int_len(value);
+    int digit_length = get_int_len(value, 16);
     char message[6];
+    for (int i = 0; i < digit_length; i++) {
+        int fraction = value % 10;
+        message[digit_length - 1 - i] = (char)('0' + fraction);
+        value /= 10;
+    }
+    for (int i = 0; i < digit_length; i++) {
+        usart2_write_byte(message[i]);
+    }
+}
+
+void usart2_write_uint32(uint32_t value) {
+
+    int digit_length = get_int_len(value, 32);
+    char message[12];
     for (int i = 0; i < digit_length; i++) {
         int fraction = value % 10;
         message[digit_length - 1 - i] = (char)('0' + fraction);
@@ -208,8 +222,12 @@ void i2c1_scan_bus(void)
     }
 }
 
-static int get_int_len(int number) {
-    if (number > 65536) {return 0;}
+static int get_int_len(long number, int bits_amount) {
+    long upper_threshold = 0;
+    if (bits_amount == 16) {upper_threshold = 65536;}
+    else if (bits_amount == 32) {upper_threshold = 4294967296;}
+    else if (bits_amount == 8) {upper_threshold = 256;}
+    if (number > upper_threshold) {return -1;} // number is too big for the specified bits_amount
     int count = 0;
 
     do

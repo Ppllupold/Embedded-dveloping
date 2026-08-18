@@ -11,5 +11,7 @@ void vOneWireTask(void *pvParameters);
 void vThermistorTask(void *pvParameters);
 void vFlameAlarmTask(void *pvParameters);
 void vLaserTripTask(void *pvParameters);
+void vClapTask(void *pvParameters);
+void vIRreceiveTask(void *pvParameters);
 
 #endif // APP_TASKS_H

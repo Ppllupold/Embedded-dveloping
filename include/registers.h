@@ -44,6 +44,8 @@
 // ADC_IRQn=18 -> IPR4 (18/4=4), byte 2 (18 mod 4 = 2). Same packing/shift
 // rules as IPR2/IPR7/IPR8 above.
 #define NVIC_IPR4  (*(volatile uint32_t *)0xE000E410)
+// EXTI1_IRQn=7 -> IPR1 (7/4=1), byte 3 (7 mod 4 = 3).
+#define NVIC_IPR1  (*(volatile uint32_t *)0xE000E404)
 
 //USART2
 #define USART2_CR1 (*(volatile uint32_t *)0x4000440C)
@@ -180,6 +182,20 @@
 #define TIM4_CCR1  (*(volatile uint32_t *)0x40000834)
 #define TIM4_CCR2  (*(volatile uint32_t *)0x40000838)
 
+// TIM3 -- base 0x40000400, on APB1. Same general-purpose timer layout as
+// TIM2/TIM4. For the IR receiver: channel 3 (PB0, AF2) captures instead of
+// compares, so CCMR2 (not CCMR1 -- CH3/CH4 live there) and CCR3 are what's
+// needed here; CCMR1/CCR1/CCR2 intentionally omitted, no job for them yet.
+#define TIM3_CR1   (*(volatile uint32_t *)0x40000400)
+#define TIM3_DIER  (*(volatile uint32_t *)0x4000040C)
+#define TIM3_SR    (*(volatile uint32_t *)0x40000410)
+#define TIM3_CCMR2 (*(volatile uint32_t *)0x4000041C)
+#define TIM3_CCER  (*(volatile uint32_t *)0x40000420)
+#define TIM3_CNT   (*(volatile uint32_t *)0x40000424)
+#define TIM3_PSC   (*(volatile uint32_t *)0x40000428)
+#define TIM3_ARR   (*(volatile uint32_t *)0x4000042C)
+#define TIM3_CCR3  (*(volatile uint32_t *)0x4000043C)
+
 // SYSCFG -- base 0x40013800, on APB2 (RCC_APB2ENR, already defined above --
 // bit 14 = SYSCFGEN). Its only job in this driver is the EXTI port mux:
 // EXTI has just 16 lines (one per pin NUMBER, 0-15), shared across every
@@ -188,6 +204,8 @@
 // DO) is the only EXTI source this project uses so far. EXTICR1/3/4 would
 // cover lines 0-3/8-11/12-15 if another EXTI source gets added later.
 #define SYSCFG_EXTICR2 (*(volatile uint32_t *)0x4001380C)
+// EXTICR1 -- covers lines 0-3. Needed for PB1 (clap sensor DO), EXTI line 1.
+#define SYSCFG_EXTICR1 (*(volatile uint32_t *)0x40013808)
 
 // EXTI -- base 0x40013C00, on APB2. Sits logically between SYSCFG's port
 // mux and the NVIC: IMR is the "arm this line to actually request an

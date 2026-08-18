@@ -34,10 +34,15 @@ extern TaskHandle_t xLaserTaskHandle; // set by xTaskCreate() when vLaserTripTas
 extern TaskHandle_t xPWMTaskHandle; // set by xTaskCreate() when vPWMTimerTask is created --
                                      // notified from vLaserTripTask (task context, not an ISR),
                                      // so this one uses plain xTaskNotify, not the FromISR variant
+extern TaskHandle_t xClapTaskHandle; // set by xTaskCreate() when vClapTask is created --
+                                      // EXTI1_IRQHandler notifies this
+extern TaskHandle_t xIRTaskHandle; // set by xTaskCreate() when vIRreceiveTask is created --
+
 
 // USART2
 void usart2_write_byte(char byte);
 void usart2_write_uint16(uint16_t value);
+void usart2_write_uint32(uint32_t value);
 void usart2_write_float(float value, uint8_t decimals);
 
 // SPI1

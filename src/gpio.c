@@ -67,7 +67,19 @@ void configure_gpio(void)
     GPIOA_MODER &= ~(0x3 << 16);
     GPIOA_MODER |= (1 << 16);
 
+    //PB0 -- TIM3_CH3, alternate function AF2. Input capture for IR receiver.
+    GPIOB_MODER &= ~(0x3 << 0);
+    GPIOB_MODER |= (0x2 << 0);
+    GPIOB_AFRL &= ~(0xF << 0);
+    GPIOB_AFRL |= (0x2 << 0);
 
+
+    // PB1 -- clap sensor DO. Idles HIGH, drives LOW on trigger (confirmed
+    // via multimeter -- opposite of the flame sensor). Pull-UP to match
+    // that idle state if unplugged, not pull-down.
+    GPIOB_MODER &= ~(0x3 << 2);
+    GPIOB_PUPDR &= ~(0x3 << 2);
+    GPIOB_PUPDR |= (0x1 << 2); // pull-up (01)
 
     // PB2 -- active buzzer signal, plain push-pull output (OTYPER left at
     // its reset default of 0 = push-pull, same as PA8's LED). Worth knowing:
@@ -78,17 +90,13 @@ void configure_gpio(void)
     GPIOB_MODER &= ~(0x3 << 4);
     GPIOB_MODER |= (1 << 4);
     
-    // PB4 -- flame sensor DO. Internal pull-down added after finding this
-    // line floats to an undefined HIGH reading whenever the sensor module
-    // isn't actively driving it (e.g. physically unplugged) -- with no
-    // pull configured, that float was read as a permanent "flame
-    // detected." The sensor's own comparator output is low-impedance, so
-    // it still overrides this weak internal pull-down cleanly whenever
-    // it's actually connected and driving the line.
+    // PB4 -- sensor DO. Internal pull-up: idles high, drives low on
+    // detection. Prevents an undefined floating LOW read when nothing's
+    // driving the line (e.g. unplugged); the sensor's low-impedance
+    // output still overrides this weak pull-up when connected.
     GPIOB_MODER &= ~(0x3 << 8);
     GPIOB_PUPDR &= ~(0x3 << 8);
-    GPIOB_PUPDR |= (0x2 << 8); // pull-down (10)
-
+    GPIOB_PUPDR |= (0x1 << 8); // pull-up (01)
 
     // PB5 -- OneWire data, moved off PB0 (ADC1_IN8, not 5V-tolerant) now that
     // the DS18B20 needs 5V to clear its internal ~1.5V drop. PB5 is a plain

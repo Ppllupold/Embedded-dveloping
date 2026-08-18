@@ -3,6 +3,7 @@
 #include "serial_interfaces.h"
 #include "irq.h"
 #include "gpio.h"
+#include "timers.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "app_tasks.h"
@@ -19,14 +20,25 @@ int main(void)
                                    // bits[4:7], EXTI5's field, by mistake
     SYSCFG_EXTICR2 |= (1 << 0);   // select port B (0001) for EXTI4
     EXTI_IMR |= (1 << 4); // unmask line 4
-    EXTI_RTSR |= (1 << 4); // rising edge trigger for line 4 -- confirmed via multimeter
-                           // directly on the sensor's DO pin: idles low, drives to 3.3V
-                           // on detection. Opposite of the falling-edge assumption this
+    EXTI_FTSR |= (1 << 4); // falling edge trigger for line 4 -- confirmed via multimeter
+                           // directly on the sensor's DO pin: idles high, drives to 0V
+                           // on detection
                            // was originally configured for.
 
+    // Clap sensor, PB1/EXTI1. Idles HIGH, drives LOW on trigger -- confirmed
+    // via multimeter, opposite of the flame sensor -- so falling edge, not rising.
+    SYSCFG_EXTICR1 &= ~(0xF << 4);
+    SYSCFG_EXTICR1 |= (1 << 4); // port B for EXTI1
+    EXTI_IMR |= (1 << 1);
+    EXTI_FTSR |= (1 << 1);
+
     // NVIC_ISER0 |= (1 << 28); // TIM2
-    NVIC_ISER0 |= (1 << 10); // EXTI4
-    NVIC_ISER0 |= (1 << 18); // ADC -- Analog Watchdog (laser tripwire)
+    // EXTI1 (clap) moved below, after xTaskCreate(&vClapTask...) -- was
+    // enabling before xClapTaskHandle got assigned, a real boot-window race.
+    // EXTI4 (flame) and ADC watchdog (laser) left disabled here: their tasks
+    // are commented out below, so xFlameTaskHandle/xLaserTaskHandle are NULL
+    // forever -- leaving these enabled meant any real flame/laser trigger,
+    // any time, was a guaranteed NULL-handle configASSERT hang.
     NVIC_ISER0 |= (1 << 31); // I2C1_EV
     NVIC_ISER1 |= (1 << 0);  // I2C1_ER -- separate line, IRQ32 (first bit of ISER1's range)
     NVIC_ISER1 |= (1 << 6);  // USART2
@@ -49,37 +61,12 @@ int main(void)
     // the exact "forgot the priority, stuck at 0" bug already caught once
     // on EXTI4 this project.
     NVIC_IPR4 = (NVIC_IPR4 & ~(0xFFUL << 16)) | (5UL << 20);
+    NVIC_IPR1 = (NVIC_IPR1 & ~(0xFFUL << 24)) | (5UL << 28); // EXTI1, byte 3
+    NVIC_IPR7 = (NVIC_IPR7 & ~(0xFFUL << 8)) | (5UL << 12); // TIM3, IRQ29, byte 1
 
-    RCC_APB1ENR |= (1 << 0); // TIM2 clock
-    TIM2_PSC = 15;
-    TIM2_ARR = 0xFFFFFFFF;
-    // TIM2_DIER |= (1 << 0);
-    TIM2_CR1 |= (1 << 0);
-
-    RCC_APB1ENR |= (1 << 2); // Enable TIM4 clock
-    // PSC bumped from 1599 -- that gave ~99Hz, fine for the LED's breathing
-    // fade but inaudible/unusable as a buzzer tone on CH2, which shares this
-    // same PSC/ARR (base frequency). ~157 keeps ARR=100 unchanged and lands
-    // both channels around ~1kHz -- audible on the buzzer, imperceptibly
-    // different on the LED fade.
-    TIM4_PSC = 157;
-    TIM4_ARR = 100;
-    TIM4_CCMR1 |= (1 << 3); // Enable preload for channel 1
-    TIM4_CCMR1 &= ~(0x7 << 4);
-    TIM4_CCMR1 |= (0x6 << 4); // Set channel 1 to PWM mode 1
-    TIM4_CCER |= (1 << 0); // Enable channel 1 output
-    TIM4_CCR1 = 50; // Set duty cycle to 50%
-
-    // CH2 -- passive buzzer, PB7. Same PWM mode 1 setup as CH1, mirrored at
-    // CH2's own bit positions in CCMR1/CCER. CC2E is left OFF here --
-    // vPWMTimerTask gates it on/off itself to produce the pulsed alarm
-    // pattern, rather than driving it continuously like CH1's LED.
-    TIM4_CCMR1 |= (1 << 11); // Enable preload for channel 2
-    TIM4_CCMR1 &= ~(0x7 << 12);
-    TIM4_CCMR1 |= (0x6 << 12); // Set channel 2 to PWM mode 1
-    TIM4_CCR2 = 50; // 50% duty -- square wave, not used as a fade level like CCR1
-
-    TIM4_CR1 |= (1 << 0);
+    configure_timers(); // TIM2 (1Hz tick) + TIM4 (PWM, PB6/PB7) -- was inline
+                         // here, now lives in timers.c alongside TIM3, once
+                         // the IR receiver's Input Capture setup is added there
 
     RCC_APB1ENR |= (1 << 17);                      // Enable USART2 clock
     USART2_BRR = (8 << 4) | 11;                    // Set baud rate to 115200 (assuming 16 MHz clock)
@@ -191,10 +178,21 @@ int main(void)
     // captured into xFlameTaskHandle so EXTI4_IRQHandler has a target to
     // notify.
     xTaskCreate(&vFlameAlarmTask, "Flame", 128, NULL, 2, &xFlameTaskHandle);
-    xTaskCreate(&vLaserTripTask, "Laser", 128, NULL, 2, &xLaserTaskHandle);
-    // vPWMTimerTask existed since the LED milestone but was never actually
+    // xTaskCreate(&vLaserTripTask, "Laser", 128, NULL, 2, &xLaserTaskHandle);
+    //xTaskCreate(&vClapTask, "Clap", 256, NULL, 2, &xClapTaskHandle);
+    //xTaskCreate(&vIRreceiveTask, "IR", 128, NULL, 2, &xIRTaskHandle); // IR receiver task
     // created here -- it wasn't running under the scheduler at all until now.
-    xTaskCreate(&vPWMTimerTask, "PWM", 128, NULL, 1, &xPWMTaskHandle);
+    //xTaskCreate(&vPWMTimerTask, "PWM", 128, NULL, 1, &xPWMTaskHandle);
+
+    // EXTI1/EXTI4 enabled only now -- their handles are guaranteed assigned
+    // above, so any trigger from here on always has a real task to notify.
+    // EXTI1 and TIM3 disabled here -- vClapTask/vIRreceiveTask are
+    // commented out above, so xClapTaskHandle/xIRTaskHandle are NULL;
+    // leaving these enabled notifies a NULL handle on any stray edge.
+    //NVIC_ISER0 |= (1 << 7);  // EXTI1 -- clap sensor
+    NVIC_ISER0 |= (1 << 10); // EXTI4 -- flame sensor
+    //NVIC_ISER0 |= (1 << 29); // TIM3 -- IR receiver
+
     vTaskStartScheduler(); // never returns -- the scheduler takes over the CPU
     
 
